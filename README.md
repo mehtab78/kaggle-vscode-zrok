@@ -37,7 +37,6 @@ That's it! VS Code opens automatically.
 - **Proper logging**: Clear, structured logging throughout
 - **Error handling**: Robust error handling with helpful messages
 - **Password security**: Optional `--hide-password` flag for sensitive environments
-- **CI/CD**: Automated testing with GitHub Actions
 
 ## 📁 Structure
 
