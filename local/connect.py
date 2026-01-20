@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-Kaggle VS Code Connection Helper
-Connects to Kaggle via zrok private tunnel automatically.
+Kaggle VS Code Connection Client
+
+Usage:
+    python connect.py --token YOUR_ZROK_TOKEN
+    python connect.py --token YOUR_ZROK_TOKEN --no-vscode
+    python connect.py --stop
+
+Auto-discovers Kaggle tunnel and connects via VS Code.
 """
 
 import subprocess
@@ -12,39 +18,77 @@ import argparse
 import time
 import signal
 import urllib.request
+import urllib.error
 from pathlib import Path
+from typing import Optional
 
 # ═══════════════════════════════════════════════════════════════
-#                     Zrok API Client
+#                     Zrok API Client (Embedded)
 # ═══════════════════════════════════════════════════════════════
+
+class ZrokError(Exception):
+    """Base exception for Zrok operations."""
+    pass
+
 
 class Zrok:
-    """Abstraction for zrok operations using HTTP API."""
+    """Zrok API client for auto-discovery and tunnel management."""
     
     BASE_URL = "https://api-v1.zrok.io/api/v1"
+    TIMEOUT = 30
+    MAX_RETRIES = 3
     
     def __init__(self, token: str, name: str = "kaggle_client"):
+        if not token:
+            raise ValueError("Token is required")
         self.token = token
         self.name = name
     
-    def get_environments(self):
-        """Get all zrok environments via HTTP API."""
-        req = urllib.request.Request(
-            url=f"{self.BASE_URL}/overview",
-            headers={"x-token": self.token}
-        )
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read().decode())
-        return data.get('environments', [])
+    def _request(self, endpoint: str, method: str = "GET", data: dict = None) -> dict:
+        """Make HTTP request with retry logic."""
+        headers = {"x-token": self.token}
+        if data:
+            headers["Content-Type"] = "application/zrok.v1+json"
+        
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                req = urllib.request.Request(
+                    url=f"{self.BASE_URL}{endpoint}",
+                    headers=headers,
+                    data=json.dumps(data).encode() if data else None,
+                    method=method
+                )
+                with urllib.request.urlopen(req, timeout=self.TIMEOUT) as resp:
+                    content = resp.read()
+                    return json.loads(content.decode()) if content else {}
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    raise ZrokError("Invalid token")
+                if e.code == 404:
+                    return {}
+            except (urllib.error.URLError, json.JSONDecodeError):
+                pass
+            
+            if attempt < self.MAX_RETRIES - 1:
+                time.sleep(2 * (attempt + 1))
+        
+        raise ZrokError("API request failed")
     
-    def find_env(self, name: str):
+    def get_environments(self) -> list:
+        """Get all environments."""
+        try:
+            return self._request("/overview").get('environments', [])
+        except ZrokError:
+            return []
+    
+    def find_env(self, name: str) -> Optional[dict]:
         """Find environment by name."""
         for item in self.get_environments():
-            if item["environment"]["description"].lower() == name.lower():
+            if item.get("environment", {}).get("description", "").lower() == name.lower():
                 return item
         return None
     
-    def find_share_token(self, server_name: str = "kaggle_server", port: int = 22):
+    def find_share_token(self, server_name: str = "kaggle_server", port: int = 22) -> Optional[str]:
         """Find SSH tunnel share token from server environment."""
         env = self.find_env(server_name)
         if not env:
@@ -56,31 +100,35 @@ class Zrok:
                 return share.get("shareToken")
         return None
     
-    def delete_env(self, zid: str):
+    def delete_env(self, zid: str) -> bool:
         """Delete environment by zId."""
-        req = urllib.request.Request(
-            url=f"{self.BASE_URL}/disable",
-            headers={"x-token": self.token, "Content-Type": "application/zrok.v1+json"},
-            data=json.dumps({"identity": zid}).encode(),
-            method="POST"
-        )
-        with urllib.request.urlopen(req) as resp:
-            return resp.getcode() == 200
+        try:
+            self._request("/disable", "POST", {"identity": zid})
+            return True
+        except ZrokError:
+            return False
     
-    def disable(self):
-        """Disable zrok locally and clean up remote environment."""
+    def disable(self) -> None:
+        """Disable local zrok and clean up remote environment."""
         subprocess.run(["zrok", "disable"], capture_output=True)
         env = self.find_env(self.name)
         if env:
-            self.delete_env(env['environment']['zId'])
+            zid = env.get('environment', {}).get('zId')
+            if zid:
+                self.delete_env(zid)
     
-    def enable(self):
+    def enable(self) -> None:
         """Enable zrok with environment name."""
-        subprocess.run(["zrok", "enable", self.token, "-d", self.name], check=True)
+        result = subprocess.run(
+            ["zrok", "enable", self.token, "-d", self.name],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            raise ZrokError(f"Enable failed: {result.stderr}")
     
     @staticmethod
-    def is_installed():
-        """Check if zrok is available."""
+    def is_installed() -> bool:
+        """Check if zrok CLI is available."""
         try:
             subprocess.run(["zrok", "version"], capture_output=True, check=True)
             return True
@@ -89,30 +137,36 @@ class Zrok:
 
 
 # ═══════════════════════════════════════════════════════════════
-#                     Connection Helpers
+#                     Configuration & SSH
 # ═══════════════════════════════════════════════════════════════
 
-CONFIG_FILE = Path.home() / ".kaggle_vscode_config.json"
+CONFIG_FILE = Path.home() / ".kaggle_zrok_config.json"
 SSH_CONFIG = Path.home() / ".ssh" / "config"
-ZROK_PID_FILE = Path.home() / ".kaggle_zrok_access.pid"
+PID_FILE = Path.home() / ".kaggle_zrok_access.pid"
 
-def load_config():
+
+def load_config() -> dict:
     """Load saved configuration."""
     if CONFIG_FILE.exists():
-        return json.loads(CONFIG_FILE.read_text())
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except json.JSONDecodeError:
+            return {}
     return {}
 
-def save_config(config):
-    """Save configuration."""
+
+def save_config(config: dict) -> None:
+    """Save configuration securely."""
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
     CONFIG_FILE.chmod(0o600)
 
-def update_ssh_config(host_name: str = "kaggle", port: int = 9191):
-    """Update SSH config for localhost connection."""
+
+def update_ssh_config(host: str = "kaggle", port: int = 9191) -> None:
+    """Update SSH config for the tunnel connection."""
     SSH_CONFIG.parent.mkdir(mode=0o700, exist_ok=True)
     
     entry = f"""
-Host {host_name}
+Host {host}
     HostName 127.0.0.1
     User root
     Port {port}
@@ -121,15 +175,15 @@ Host {host_name}
     ServerAliveInterval 60
 """
     
+    # Read existing config
     existing = SSH_CONFIG.read_text() if SSH_CONFIG.exists() else ""
     
-    # Remove existing entry
-    if f"Host {host_name}" in existing:
+    # Remove existing entry for this host
+    if f"Host {host}" in existing:
         lines = existing.split('\n')
-        new_lines = []
-        skip = False
+        new_lines, skip = [], False
         for line in lines:
-            if line.strip() == f"Host {host_name}":
+            if line.strip() == f"Host {host}":
                 skip = True
                 continue
             if skip and line.strip().startswith('Host '):
@@ -140,23 +194,38 @@ Host {host_name}
     
     SSH_CONFIG.write_text(existing.rstrip() + entry)
     SSH_CONFIG.chmod(0o600)
-    print(f"✓ SSH config updated for '{host_name}'")
+    print(f"✓ SSH config updated for '{host}'")
 
-def stop_zrok_access():
+
+# ═══════════════════════════════════════════════════════════════
+#                     Tunnel Management
+# ═══════════════════════════════════════════════════════════════
+
+def stop_tunnel() -> None:
     """Stop any running zrok access process."""
-    if ZROK_PID_FILE.exists():
+    stopped = False
+    
+    # Kill by PID file
+    if PID_FILE.exists():
         try:
-            pid = int(ZROK_PID_FILE.read_text().strip())
+            pid = int(PID_FILE.read_text().strip())
             os.kill(pid, signal.SIGTERM)
+            stopped = True
             print(f"✓ Stopped zrok access (PID: {pid})")
-        except (ProcessLookupError, ValueError):
+        except (ProcessLookupError, ValueError, OSError):
             pass
-        ZROK_PID_FILE.unlink(missing_ok=True)
+        PID_FILE.unlink(missing_ok=True)
+    
+    # Also kill any stray processes
     subprocess.run(['pkill', '-f', 'zrok access'], capture_output=True)
+    
+    if not stopped:
+        print("✓ No tunnel running")
 
-def start_zrok_access(share_token: str, port: int = 9191):
-    """Start zrok access private."""
-    stop_zrok_access()
+
+def start_tunnel(share_token: str, port: int = 9191) -> subprocess.Popen:
+    """Start zrok access private tunnel."""
+    stop_tunnel()
     
     process = subprocess.Popen(
         ['zrok', 'access', 'private', '--bind', f'127.0.0.1:{port}', share_token],
@@ -165,43 +234,67 @@ def start_zrok_access(share_token: str, port: int = 9191):
         text=True
     )
     
-    ZROK_PID_FILE.write_text(str(process.pid))
-    print(f"✓ zrok access started (PID: {process.pid})")
+    PID_FILE.write_text(str(process.pid))
+    print(f"✓ Tunnel started (PID: {process.pid})")
+    
+    # Wait for tunnel to establish
     time.sleep(3)
     return process
 
 
+def launch_vscode(host: str, workspace: str) -> None:
+    """Launch VS Code with remote SSH."""
+    try:
+        subprocess.Popen(
+            ['code', '--remote', f'ssh-remote+{host}', workspace],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        print("✓ VS Code launched")
+    except FileNotFoundError:
+        print("⚠ VS Code 'code' command not found")
+        print(f"  Connect manually: code --remote ssh-remote+{host} {workspace}")
+
+
 # ═══════════════════════════════════════════════════════════════
-#                     Main
+#                     Main Entry Point
 # ═══════════════════════════════════════════════════════════════
 
-def main(args):
+def connect(args) -> int:
+    """Main connection logic."""
+    
+    # Check zrok installation
     if not Zrok.is_installed():
-        print("❌ zrok not installed. Install from https://docs.zrok.io/docs/guides/install/")
-        sys.exit(1)
+        print("❌ zrok not installed")
+        print("   Install from: https://docs.zrok.io/docs/guides/install/")
+        return 1
     
     zrok = Zrok(args.token, args.name)
     
-    # Clean up and enable local zrok
+    # Setup local zrok
     print("🔄 Setting up zrok...")
-    zrok.disable()
-    zrok.enable()
-    print("✓ zrok enabled")
+    try:
+        zrok.disable()
+        zrok.enable()
+        print("✓ zrok enabled")
+    except ZrokError as e:
+        print(f"❌ Failed to enable zrok: {e}")
+        return 1
     
-    # Find server's share token via API
+    # Auto-discover server tunnel
     print(f"\n🔍 Looking for '{args.server_name}' environment...")
     share_token = zrok.find_share_token(args.server_name)
     
     if not share_token:
         print(f"❌ Could not find SSH tunnel in '{args.server_name}'")
-        print("   Make sure the Kaggle notebook is running Cell 2.")
-        sys.exit(1)
+        print("   Make sure the Kaggle notebook is running zrok_server.py")
+        return 1
     
-    print(f"✓ Found share token: {share_token}")
+    print(f"✓ Found tunnel: {share_token[:16]}...")
     
-    # Start zrok access
+    # Start local tunnel
     print(f"\n🚀 Starting tunnel on port {args.port}...")
-    start_zrok_access(share_token, args.port)
+    start_tunnel(share_token, args.port)
     
     # Update SSH config
     update_ssh_config(args.name, args.port)
@@ -209,18 +302,14 @@ def main(args):
     # Launch VS Code
     if not args.no_vscode:
         print(f"\n💻 Launching VS Code...")
-        subprocess.Popen(
-            ['code', '--remote', f'ssh-remote+{args.name}', args.workspace],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        print(f"✓ VS Code launched")
-        time.sleep(3)
+        launch_vscode(args.name, args.workspace)
+        time.sleep(2)
     
+    # Print connection info
     print(f"""
-{'='*50}
+{'='*55}
 🎉 CONNECTED!
-{'='*50}
+{'='*55}
 
 SSH:     ssh {args.name}
          ssh root@localhost -p {args.port}
@@ -228,52 +317,79 @@ SSH:     ssh {args.name}
 VS Code: code --remote ssh-remote+{args.name} {args.workspace}
 
 Press Ctrl+C to disconnect.
-{'='*50}
+{'='*55}
 """)
     
-    # Keep running
+    # Keep running until interrupted
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
         print("\n🛑 Disconnecting...")
-        stop_zrok_access()
+        stop_tunnel()
         print("Goodbye! 👋")
+    
+    return 0
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Connect to Kaggle via zrok')
-    parser.add_argument('--token', '-t', type=str, help='Your zrok API token')
-    parser.add_argument('--name', default='kaggle_client', help='Local environment name (default: kaggle_client)')
-    parser.add_argument('--server-name', default='kaggle_server', help='Server environment name (default: kaggle_server)')
-    parser.add_argument('--port', type=int, default=9191, help='Local port (default: 9191)')
-    parser.add_argument('--no-vscode', action='store_true', help='Skip VS Code launch')
-    parser.add_argument('--workspace', default='/kaggle/working', help='Remote workspace path')
-    parser.add_argument('--stop', action='store_true', help='Stop zrok access and exit')
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description='Connect to Kaggle via zrok tunnel',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python connect.py --token abc123xyz
+  python connect.py -t abc123xyz --no-vscode
+  python connect.py --stop
+        """
+    )
+    parser.add_argument('--token', '-t', help='Your zrok API token')
+    parser.add_argument('--name', default='kaggle_client', 
+                        help='Local environment name (default: kaggle_client)')
+    parser.add_argument('--server-name', default='kaggle_server', 
+                        help='Server environment name (default: kaggle_server)')
+    parser.add_argument('--port', type=int, default=9191, 
+                        help='Local port (default: 9191)')
+    parser.add_argument('--no-vscode', action='store_true', 
+                        help='Skip VS Code launch')
+    parser.add_argument('--workspace', default='/kaggle/working', 
+                        help='Remote workspace path')
+    parser.add_argument('--stop', action='store_true', 
+                        help='Stop tunnel and exit')
     
     args = parser.parse_args()
     
+    # Handle stop command
     if args.stop:
-        stop_zrok_access()
-        sys.exit(0)
+        stop_tunnel()
+        return 0
     
+    # Get token from args, config, or prompt
     if not args.token:
-        # Try loading from config
         config = load_config()
         if 'token' in config:
             args.token = config['token']
+            print(f"Using saved token")
         else:
             args.token = input("Enter your zrok API token: ").strip()
             if args.token:
-                config['token'] = args.token
-                save_config(config)
+                save_config({'token': args.token})
+                print("Token saved for future use")
     
     if not args.token:
         print("❌ Token required")
-        sys.exit(1)
+        return 1
     
     try:
-        main(args)
+        return connect(args)
+    except KeyboardInterrupt:
+        print("\n🛑 Interrupted")
+        stop_tunnel()
+        return 130
     except Exception as e:
         print(f"❌ Error: {e}")
-        sys.exit(1)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

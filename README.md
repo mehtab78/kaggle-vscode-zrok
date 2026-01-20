@@ -10,7 +10,12 @@ Connect to Kaggle notebooks remotely using VS Code through zrok private tunnels.
 Create a free account at [zrok.io](https://zrok.io) and copy your token.
 
 ### 2. On Kaggle
-Copy `main.ipynb` to Kaggle, set your `ZROK_TOKEN`, and run both cells.
+Create a new notebook and run:
+```python
+!git clone https://github.com/mehtab78/kaggle-vscode-zrok.git
+%cd /kaggle/working/kaggle-vscode-zrok
+!python3 zrok_server.py --token "YOUR_ZROK_TOKEN" --password "0"
+```
 
 ### 3. On Local Machine
 ```bash
@@ -34,26 +39,29 @@ That's it! VS Code opens automatically.
 
 ```
 kaggle-vscode-zrok/
-├── main.ipynb              # Run this on Kaggle
+├── zrok_server.py          # Main server script (run on Kaggle)
 ├── local/
 │   ├── connect.py          # Run this locally
-│   ├── install.sh          # Quick installer
-│   └── setup_debian12.sh   # Full Debian setup
+│   └── install.sh          # Quick installer
 ├── kaggle/
-│   ├── setup_kaggle.ipynb  # Alternative notebook
-│   └── setup_script.py     # Standalone script
+│   └── setup_kaggle.ipynb  # Quick start notebook
 └── tests/                  # Test suite
 ```
 
 ## 🔧 Configuration
 
-### Kaggle (main.ipynb Cell 1)
-```python
-ZROK_TOKEN = "<YOUR_TOKEN>"    # Required
-SSH_PASSWORD = "0"             # SSH password
-AUTHORIZED_KEYS_URL = ""       # Optional: URL to public keys
-ENV_NAME = "kaggle_server"     # Must match client
+### Kaggle (zrok_server.py)
+```bash
+python3 zrok_server.py --token "TOKEN" --password "0"
+python3 zrok_server.py --token "TOKEN" --authorized_keys_url "URL"  # With SSH keys
 ```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--token` | (required) | Your zrok API token |
+| `--password` | 0 | SSH password |
+| `--authorized_keys_url` | "" | URL to public keys file |
+| `--env-name` | kaggle_server | Environment name |
 
 ### Local (connect.py)
 ```bash
