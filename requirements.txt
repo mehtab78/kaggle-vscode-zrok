@@ -1,2 +1,5 @@
-# Local development requirements (optional)
-paramiko>=2.7.0
+# Runtime dependencies (none required for basic usage)
+
+# Development/Testing dependencies
+pytest>=7.0.0
+pytest-cov>=4.0.0
