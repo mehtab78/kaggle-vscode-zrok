@@ -1,0 +1,12 @@
+{
+    "remote.SSH.remotePlatform": {
+        "kaggle": "linux"
+    },
+    "remote.SSH.connectTimeout": 60,
+    "remote.SSH.defaultExtensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter"
+    ],
+    "remote.SSH.showLoginTerminal": true,
+    "python.defaultInterpreterPath": "/opt/conda/bin/python"
+}

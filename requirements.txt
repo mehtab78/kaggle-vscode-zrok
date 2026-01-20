@@ -1,0 +1,2 @@
+# Local development requirements (optional)
+paramiko>=2.7.0
