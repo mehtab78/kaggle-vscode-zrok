@@ -1,92 +1,139 @@
 #!/usr/bin/env python3
 """
 Kaggle VS Code Remote Setup Script
-Run this script in a Kaggle notebook to set up remote VS Code connection.
-Supports both PUBLIC and PRIVATE zrok tunnels.
+Run this in a Kaggle notebook to enable remote VS Code access via zrok.
 """
 
 import subprocess
 import os
-import sys
 import time
 import threading
-import re
-import signal
+import urllib.request
+import tarfile
+import json
 
-# ╔═══════════════════════════════════════════════════════════════╗
-# ║                    CONFIGURATION                              ║
-# ║               ⚠️  EDIT THESE VALUES  ⚠️                        ║
-# ╚═══════════════════════════════════════════════════════════════╝
+# ═══════════════════════════════════════════════════════════════
+#                     CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
 
-ZROK_TOKEN = "YOUR_ZROK_TOKEN"       # Get from https://zrok.io
-SSH_PASSWORD = "kaggle123"            # SSH login password
-GITHUB_USERNAME = ""                  # Optional: GitHub username for SSH key auth
+ZROK_TOKEN = "<YOUR_ZROK_TOKEN>"     # Get from https://zrok.io
+SSH_PASSWORD = "0"                    # SSH login password
+AUTHORIZED_KEYS_URL = ""              # Optional: URL to authorized_keys file
 
-# Tunnel mode: "public" or "private"
-# - PUBLIC:  Direct SSH access (ssh root@hostname.share.zrok.io)
-#            No zrok needed on client. Easier but less secure.
-# - PRIVATE: Requires `zrok access private <token>` on client
-#            More secure, requires zrok on client machine.
-TUNNEL_MODE = "public"
+ENV_NAME = "kaggle_server"            # Environment name (must match client)
 
-# ╔═══════════════════════════════════════════════════════════════╗
-# ║                    DO NOT EDIT BELOW                          ║
-# ╚═══════════════════════════════════════════════════════════════╝
+# ═══════════════════════════════════════════════════════════════
+#                     Zrok API Client
+# ═══════════════════════════════════════════════════════════════
 
-class Colors:
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    BOLD = '\033[1m'
-    END = '\033[0m'
-
-def print_header(text):
-    print(f"\n{Colors.BLUE}{'='*60}{Colors.END}")
-    print(f"{Colors.BOLD}{text}{Colors.END}")
-    print(f"{Colors.BLUE}{'='*60}{Colors.END}")
-
-def print_success(text):
-    print(f"{Colors.GREEN}✅ {text}{Colors.END}")
-
-def print_error(text):
-    print(f"{Colors.RED}❌ {text}{Colors.END}")
-
-def print_info(text):
-    print(f"{Colors.CYAN}ℹ️  {text}{Colors.END}")
-
-def print_warning(text):
-    print(f"{Colors.YELLOW}⚠️  {text}{Colors.END}")
-
-def run_command(cmd, show=False, check=False):
-    """Run a shell command and return the result."""
-    if show:
-        print(f"$ {cmd}")
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    if check and result.returncode != 0:
-        print_error(f"Command failed: {cmd}")
-        print(result.stderr)
-    return result
-
-def setup_ssh():
-    """Install and configure SSH server."""
-    print_info("Installing SSH server...")
-    run_command("apt-get update -qq")
-    run_command("apt-get install -y -qq openssh-server > /dev/null 2>&1")
+class Zrok:
+    """Abstraction for zrok operations using HTTP API."""
     
-    # Create required directories
+    BASE_URL = "https://api-v1.zrok.io/api/v1"
+    
+    def __init__(self, token: str, name: str):
+        if token.startswith('<') and token.endswith('>'):
+            raise ValueError("❌ Please provide your actual zrok token!")
+        self.token = token
+        self.name = name
+    
+    def get_environments(self):
+        """Get all zrok environments via HTTP API."""
+        req = urllib.request.Request(
+            url=f"{self.BASE_URL}/overview",
+            headers={"x-token": self.token}
+        )
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode())
+        return data.get('environments', [])
+    
+    def find_env(self, name: str):
+        """Find environment by name."""
+        for item in self.get_environments():
+            if item["environment"]["description"].lower() == name.lower():
+                return item
+        return None
+    
+    def delete_env(self, zid: str):
+        """Delete environment by zId."""
+        req = urllib.request.Request(
+            url=f"{self.BASE_URL}/disable",
+            headers={"x-token": self.token, "Content-Type": "application/zrok.v1+json"},
+            data=json.dumps({"identity": zid}).encode(),
+            method="POST"
+        )
+        with urllib.request.urlopen(req) as resp:
+            return resp.getcode() == 200
+    
+    def disable(self):
+        """Disable zrok locally and clean up remote environment."""
+        subprocess.run(["zrok", "disable"], capture_output=True)
+        env = self.find_env(self.name)
+        if env:
+            self.delete_env(env['environment']['zId'])
+            print(f"   Cleaned up existing '{self.name}' environment")
+    
+    def enable(self):
+        """Enable zrok with environment name."""
+        subprocess.run(["zrok", "enable", self.token, "-d", self.name], check=True)
+    
+    @staticmethod
+    def install():
+        """Install zrok from GitHub releases."""
+        print("   Downloading zrok...")
+        resp = urllib.request.urlopen("https://api.github.com/repos/openziti/zrok/releases/latest")
+        data = json.loads(resp.read())
+        
+        url = next((a["browser_download_url"] for a in data["assets"] 
+                    if "linux_amd64.tar.gz" in a["browser_download_url"]), None)
+        if not url:
+            raise RuntimeError("Could not find zrok download URL")
+        
+        urllib.request.urlretrieve(url, "/tmp/zrok.tar.gz")
+        with tarfile.open("/tmp/zrok.tar.gz", "r:gz") as tar:
+            tar.extractall("/usr/local/bin/")
+        os.remove("/tmp/zrok.tar.gz")
+        
+        subprocess.run(["zrok", "version"], check=True)
+        print("   ✓ zrok installed")
+    
+    @staticmethod
+    def is_installed():
+        """Check if zrok is available."""
+        try:
+            subprocess.run(["zrok", "version"], capture_output=True, check=True)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+
+
+# ═══════════════════════════════════════════════════════════════
+#                     SSH Setup
+# ═══════════════════════════════════════════════════════════════
+
+def setup_ssh(password: str, auth_keys_url: str = ""):
+    """Configure and start SSH server."""
+    # Install openssh
+    subprocess.run("apt-get update -qq && apt-get install -y openssh-server > /dev/null 2>&1", 
+                   shell=True, check=True)
+    
     os.makedirs("/run/sshd", exist_ok=True)
     os.makedirs("/root/.ssh", exist_ok=True)
     os.chmod("/root/.ssh", 0o700)
     
-    # Write optimized SSH config
-    sshd_config = """
-Port 22
+    # Save Kaggle environment variables for SSH sessions
+    with open("/kaggle/working/kaggle_env_vars.txt", "w") as f:
+        for key, val in os.environ.items():
+            if key.startswith(('KAGGLE_', 'CUDA_', 'PATH', 'LD_LIBRARY')):
+                f.write(f"{key}={val}\n")
+    
+    # SSH config
+    sshd_config = """Port 22
 PermitRootLogin yes
 PasswordAuthentication yes
 PubkeyAuthentication yes
 X11Forwarding yes
+AllowTcpForwarding yes
 ClientAliveInterval 60
 ClientAliveCountMax 3
 Subsystem sftp /usr/lib/openssh/sftp-server
@@ -94,223 +141,119 @@ Subsystem sftp /usr/lib/openssh/sftp-server
     with open("/etc/ssh/sshd_config", "w") as f:
         f.write(sshd_config)
     
-    # Set root password
-    run_command(f"echo 'root:{SSH_PASSWORD}' | chpasswd")
+    # Set password
+    subprocess.run(f"echo 'root:{password}' | chpasswd", shell=True, check=True)
     
-    # Add GitHub SSH keys if provided
-    if GITHUB_USERNAME:
-        print_info(f"Adding SSH keys from GitHub: {GITHUB_USERNAME}")
-        result = run_command(f"curl -sf https://github.com/{GITHUB_USERNAME}.keys")
-        if result.returncode == 0 and result.stdout.strip():
-            with open("/root/.ssh/authorized_keys", "a") as f:
-                f.write(result.stdout)
+    # Optional: authorized keys
+    if auth_keys_url:
+        try:
+            urllib.request.urlretrieve(auth_keys_url, "/root/.ssh/authorized_keys")
             os.chmod("/root/.ssh/authorized_keys", 0o600)
-            print_success("SSH keys added from GitHub")
-        else:
-            print_warning(f"Could not fetch SSH keys for {GITHUB_USERNAME}")
+            print("   ✓ SSH keys added")
+        except Exception as e:
+            print(f"   ⚠️ Could not fetch SSH keys: {e}")
     
-    # Generate host keys and start SSH
-    run_command("ssh-keygen -A 2>/dev/null")
-    run_command("/usr/sbin/sshd")
-    print_success("SSH server configured and running")
+    # Generate host keys and start
+    subprocess.run("ssh-keygen -A", shell=True, capture_output=True)
+    subprocess.run("/usr/sbin/sshd", shell=True)
 
-def install_zrok():
-    """Install zrok using official installer."""
-    print_info("Installing zrok...")
-    result = run_command("curl -sSf https://get.zrok.io | bash", check=False)
-    if result.returncode != 0:
-        # Fallback to manual download
-        print_warning("Official installer failed, trying manual download...")
-        run_command("wget -q https://github.com/openziti/zrok/releases/download/v0.4.44/zrok_0.4.44_linux_amd64.tar.gz")
-        run_command("tar -xzf zrok_0.4.44_linux_amd64.tar.gz")
-        run_command("chmod +x zrok && mv zrok /usr/local/bin/")
-    print_success("zrok installed")
 
-def enable_zrok():
-    """Enable zrok with the provided token."""
-    print_info("Enabling zrok...")
-    # Disable first in case already enabled
-    run_command("zrok disable 2>/dev/null")
-    result = run_command(f"zrok enable {ZROK_TOKEN} 2>&1")
-    if "enabled" in result.stdout.lower() or result.returncode == 0:
-        print_success("zrok enabled")
-        return True
+# ═══════════════════════════════════════════════════════════════
+#                     Main Setup
+# ═══════════════════════════════════════════════════════════════
+
+def setup():
+    """Run complete setup."""
+    print("=" * 50)
+    print("🚀 Kaggle Remote VS Code Setup")
+    print("=" * 50)
+    
+    # 1. Install dependencies
+    print("\n[1/4] 📦 Installing dependencies...")
+    print("   ✓ openssh-server")
+    
+    if not Zrok.is_installed():
+        Zrok.install()
     else:
-        print_error("Failed to enable zrok. Check your token.")
-        print(result.stdout)
-        print(result.stderr)
-        return False
-
-def start_public_tunnel():
-    """Start a PUBLIC zrok tunnel (direct SSH access)."""
-    print_header("🌐 Starting PUBLIC Tunnel")
-    print_info("Mode: Direct SSH access (no zrok needed on client)")
+        print("   ✓ zrok already installed")
     
-    process = subprocess.Popen(
-        ['zrok', 'share', 'public', '--backend-mode', 'tcpTunnel', 'localhost:22'],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
+    # 2. Setup zrok
+    print("\n[2/4] 🌐 Configuring zrok...")
+    zrok = Zrok(ZROK_TOKEN, ENV_NAME)
+    zrok.disable()
+    zrok.enable()
+    print("   ✓ zrok enabled")
     
-    hostname_found = False
-    for line in process.stdout:
-        print(line, end='')
-        
-        # Parse the hostname from output
-        if not hostname_found and 'zrok.io' in line.lower():
-            match = re.search(r'https://([a-z0-9]+\.share\.zrok\.io)', line)
-            if not match:
-                match = re.search(r'([a-z0-9]+\.share\.zrok\.io)', line)
-            if match:
-                hostname = match.group(1)
-                hostname_found = True
-                print_connection_info_public(hostname)
-
-def start_private_tunnel():
-    """Start a PRIVATE zrok tunnel (requires zrok on client)."""
-    print_header("🔒 Starting PRIVATE Tunnel")
-    print_info("Mode: Secure tunnel (requires zrok on client)")
+    # 3. Setup SSH
+    print("\n[3/4] 🔐 Configuring SSH...")
+    setup_ssh(SSH_PASSWORD, AUTHORIZED_KEYS_URL)
+    print("   ✓ SSH server running")
     
-    process = subprocess.Popen(
-        ['zrok', 'share', 'private', '--backend-mode', 'tcpTunnel', 'localhost:22'],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
-    
-    share_token_found = False
-    for line in process.stdout:
-        print(line, end='')
-        
-        # Parse the share token from output
-        if not share_token_found and 'share token' in line.lower():
-            match = re.search(r'share token[:\s]+([a-z0-9]+)', line.lower())
-            if match:
-                share_token = match.group(1)
-                share_token_found = True
-                print_connection_info_private(share_token)
-
-def print_connection_info_public(hostname):
-    """Print connection info for PUBLIC tunnel."""
-    print("\n")
-    print_header("🎉 PUBLIC TUNNEL ACTIVE!")
+    # 4. Done
+    print("\n[4/4] ✅ Setup complete!")
+    print("=" * 50)
     print(f"""
-{Colors.BOLD}📋 CONNECTION INFO:{Colors.END}
+📋 CONNECTION INFO:
+   Environment: {ENV_NAME}
+   SSH User:    root
+   Password:    {SSH_PASSWORD}
+
+🔜 NEXT STEP:
+   Run start_tunnel() to start the tunnel.
+   Then on your local machine:
    
-   Hostname:  {Colors.CYAN}{hostname}{Colors.END}
-   User:      root
-   Password:  {SSH_PASSWORD}
-
-{Colors.BOLD}🔗 CONNECT VIA SSH:{Colors.END}
-   ssh root@{hostname}
-
-{Colors.BOLD}💻 CONNECT VIA VS CODE:{Colors.END}
-   1. Install 'Remote - SSH' extension
-   2. Press F1 → "Remote-SSH: Connect to Host"
-   3. Enter: root@{hostname}
-   
-   Or run: code --remote ssh-remote+root@{hostname} /kaggle/working
-
-{Colors.BOLD}🐧 DEBIAN 12 QUICK CONNECT:{Colors.END}
-   python3 connect.py -H {hostname}
-   python3 connect.py -H {hostname} --vscode
+   python local/connect.py --token YOUR_ZROK_TOKEN
 """)
-    print("=" * 60)
+    print("=" * 50)
 
-def print_connection_info_private(share_token):
-    """Print connection info for PRIVATE tunnel."""
-    print("\n")
-    print_header("🔒 PRIVATE TUNNEL ACTIVE!")
-    print(f"""
-{Colors.BOLD}📋 CONNECTION INFO:{Colors.END}
-   
-   Share Token:  {Colors.CYAN}{share_token}{Colors.END}
-   User:         root
-   Password:     {SSH_PASSWORD}
 
-{Colors.BOLD}🔗 ON YOUR LOCAL MACHINE:{Colors.END}
-
-   Step 1: Start zrok access (in one terminal)
-   $ zrok access private {share_token}
-   
-   Step 2: Connect via SSH (in another terminal)
-   $ ssh root@localhost -p 9191
-
-{Colors.BOLD}💻 VS CODE CONNECTION:{Colors.END}
-   After running 'zrok access private':
-   1. Add to ~/.ssh/config:
-      Host kaggle
-          HostName localhost
-          Port 9191
-          User root
-   2. Connect via Remote-SSH to 'kaggle'
-
-{Colors.BOLD}🐧 DEBIAN 12 QUICK CONNECT:{Colors.END}
-   python3 connect.py --private {share_token}
-""")
-    print("=" * 60)
-
-def keep_alive():
-    """Keep the notebook alive with status updates."""
-    print_info("Keeping notebook alive... (Press Ctrl+C to stop)")
-    start_time = time.time()
+def start_tunnel():
+    """Start zrok tunnel and keep notebook alive."""
+    print("🚀 Starting zrok private tunnel...")
+    print("=" * 50)
     
+    def run_tunnel():
+        process = subprocess.Popen(
+            ["zrok", "share", "private", "--backend-mode", "tcpTunnel", "localhost:22"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        
+        for line in process.stdout:
+            print(line, end='')
+            if 'token' in line.lower():
+                import re
+                match = re.search(r'\b([a-z0-9]{12,})\b', line)
+                if match:
+                    print("\n" + "=" * 50)
+                    print("🔒 TUNNEL ACTIVE!")
+                    print("=" * 50)
+                    print(f"\nShare Token: {match.group(1)}")
+                    print(f"Password: {SSH_PASSWORD}")
+                    print("\nLocal machine: python local/connect.py --token YOUR_ZROK_TOKEN")
+                    print("=" * 50)
+    
+    thread = threading.Thread(target=run_tunnel, daemon=True)
+    thread.start()
+    
+    print("⏰ Keeping notebook alive... (Press Stop to end)\n")
+    start = time.time()
     try:
         while True:
-            time.sleep(300)  # 5 minutes
-            elapsed = int(time.time() - start_time)
-            hours, remainder = divmod(elapsed, 3600)
-            minutes, seconds = divmod(remainder, 60)
-            print(f"[{time.strftime('%H:%M:%S')}] Running for {hours:02d}:{minutes:02d}:{seconds:02d}")
+            time.sleep(300)
+            elapsed = int(time.time() - start)
+            h, m = divmod(elapsed // 60, 60)
+            print(f"[{time.strftime('%H:%M:%S')}] Running: {h:02d}h {m:02d}m")
     except KeyboardInterrupt:
-        print("\n")
-        print_warning("Tunnel stopped by user")
+        print("\n🛑 Tunnel stopped.")
 
-def main():
-    """Main setup function."""
-    print_header("🚀 Kaggle VS Code Remote Setup")
-    print(f"   Tunnel Mode: {Colors.BOLD}{TUNNEL_MODE.upper()}{Colors.END}")
-    
-    # Validate configuration
-    if ZROK_TOKEN == "YOUR_ZROK_TOKEN":
-        print_error("Please set your ZROK_TOKEN!")
-        print_info("Get one at https://zrok.io")
-        return
-    
-    if TUNNEL_MODE not in ["public", "private"]:
-        print_error("TUNNEL_MODE must be 'public' or 'private'")
-        return
-    
-    # Setup steps
-    print("\n[1/4] Setting up SSH server...")
-    setup_ssh()
-    
-    print("\n[2/4] Installing zrok...")
-    install_zrok()
-    
-    print("\n[3/4] Enabling zrok...")
-    if not enable_zrok():
-        return
-    
-    print("\n[4/4] Starting tunnel...")
-    
-    # Start tunnel in a thread
-    if TUNNEL_MODE == "public":
-        tunnel_func = start_public_tunnel
-    else:
-        tunnel_func = start_private_tunnel
-    
-    tunnel_thread = threading.Thread(target=tunnel_func, daemon=True)
-    tunnel_thread.start()
-    
-    # Wait for tunnel to start
-    time.sleep(3)
-    
-    # Keep notebook alive
-    keep_alive()
+
+# ═══════════════════════════════════════════════════════════════
+#                     Run
+# ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    main()
+    setup()
+    start_tunnel()

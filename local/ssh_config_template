@@ -1,18 +1,11 @@
 # Add this to ~/.ssh/config
+# (connect.py does this automatically)
 
-# Kaggle Remote Connection
-Host kaggle
-    HostName YOUR_ZROK_HOSTNAME.share.zrok.io
+# Kaggle Remote Connection via zrok private tunnel
+Host kaggle_client
+    HostName 127.0.0.1
     User root
-    Port 22
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-
-# Alternative with specific settings
-Host kaggle-gpu
-    HostName YOUR_ZROK_HOSTNAME.share.zrok.io
-    User root
-    Port 22
+    Port 9191
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
     ServerAliveInterval 60
