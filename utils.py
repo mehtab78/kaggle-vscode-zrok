@@ -5,9 +5,17 @@ Zrok utility class for Kaggle VS Code Remote Setup.
 
 import os
 import json
+import logging
 import subprocess
 import tarfile
 import urllib.request
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 class ZrokError(Exception):
@@ -66,8 +74,9 @@ class Zrok:
         if not env:
             return None
         for share in env.get('shares', []):
-            if f":{backend_port}" in share.get('backendProxyEndpoint', ''):
-                return share.get('token')
+            backend = share.get('backendProxyEndpoint', '')
+            if f":{backend_port}" in backend or backend == f"localhost:{backend_port}":
+                return share.get('token') or share.get('shareToken')
         return None
     
     def delete_env(self, zid: str) -> bool:
@@ -85,14 +94,14 @@ class Zrok:
         if env:
             zid = env.get('environment', {}).get('zId')
             if zid and self.delete_env(zid):
-                print(f"   ✓ Cleaned up '{self.name}' environment")
+                logger.info(f"Cleaned up '{self.name}' environment")
     
     def enable(self) -> None:
         """Enable zrok with the configured environment name."""
         # Check if already enabled
         status = subprocess.run(["zrok", "status"], capture_output=True, text=True)
         if "Account Token" in status.stdout and "<<SET>>" in status.stdout:
-            print("   ✓ zrok already enabled locally")
+            logger.info("zrok already enabled locally")
             return
         
         result = subprocess.run(
@@ -102,7 +111,7 @@ class Zrok:
         if result.returncode != 0:
             error_msg = result.stderr.strip() or result.stdout.strip()
             if "already enabled" in error_msg.lower():
-                print("   ✓ zrok already enabled")
+                logger.info("zrok already enabled")
                 return
             if "401" in error_msg or "unauthorized" in error_msg.lower():
                 raise ZrokError(
@@ -116,7 +125,7 @@ class Zrok:
     
     def share(self) -> None:
         """Start private tunnel sharing SSH port."""
-        print("Starting zrok tunnel...")
+        logger.info("Starting zrok tunnel...")
         subprocess.Popen(
             ["zrok", "share", "private", "--backend-mode", "tcpTunnel", "localhost:22"],
             stdout=subprocess.DEVNULL,
@@ -135,7 +144,7 @@ class Zrok:
     @staticmethod
     def install() -> None:
         """Install zrok from GitHub releases."""
-        print("   Downloading zrok...")
+        logger.info("Downloading zrok...")
         with urllib.request.urlopen(
             "https://api.github.com/repos/openziti/zrok/releases/latest"
         ) as resp:
@@ -152,4 +161,4 @@ class Zrok:
             tar.extractall("/usr/local/bin/")
         os.remove("/tmp/zrok.tar.gz")
         subprocess.run(["zrok", "version"], check=True)
-        print("   ✓ zrok installed")
+        logger.info("zrok installed successfully")

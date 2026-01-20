@@ -34,6 +34,10 @@ That's it! VS Code opens automatically.
 - **Private tunnels**: More secure than public endpoints
 - **Zrok API integration**: Manages environments automatically
 - **VS Code ready**: Opens remote session with one command
+- **Proper logging**: Clear, structured logging throughout
+- **Error handling**: Robust error handling with helpful messages
+- **Password security**: Optional `--hide-password` flag for sensitive environments
+- **CI/CD**: Automated testing with GitHub Actions
 
 ## 📁 Structure
 
@@ -54,14 +58,16 @@ kaggle-vscode-zrok/
 ```bash
 python3 zrok_server.py --token "TOKEN" --password "0"
 python3 zrok_server.py --token "TOKEN" --authorized_keys_url "URL"  # With SSH keys
+python3 zrok_server.py --token "TOKEN" --password "secure123" --hide-password  # Hide password in output
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--token` | (required) | Your zrok API token |
-| `--password` | 0 | SSH password |
+| `--password` | 0 | SSH password (0 = auto-generate) |
 | `--authorized_keys_url` | "" | URL to public keys file |
 | `--env-name` | kaggle_server | Environment name |
+| `--hide-password` | false | Don't display password in output |
 
 ### Local (connect.py)
 ```bash
@@ -98,7 +104,38 @@ python local/connect.py --stop                # Stop tunnel
 - **Private tunnels only**: Not publicly accessible
 - **Zero-trust**: OpenZiti-based networking
 - **No port forwarding**: Works behind NAT/firewalls
-- Use SSH keys for better security (set `AUTHORIZED_KEYS_URL`)
+- **Password masking**: Use `--hide-password` to avoid displaying passwords in logs
+
+## 🧪 Development
+
+### Running Tests
+```bash
+# Install dev dependencies
+pip install -r requirements.txt
+
+# Run all tests
+pytest tests/ -v
+
+# Run with coverage
+pytest tests/ --cov=. --cov-report=term-missing
+
+# Run specific test file
+pytest tests/test_utils.py -v
+```
+
+### Code Quality
+```bash
+# Format code
+black .
+isort .
+
+# Lint
+flake8 .
+
+# Type checking
+mypy --ignore-missing-imports .
+```
+
 
 ## 🛠️ Troubleshooting
 
