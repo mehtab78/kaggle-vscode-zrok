@@ -80,7 +80,8 @@ except ImportError:
             result = subprocess.run(["zrok", "enable", self.token, "-d", self.name], 
                                     capture_output=True, text=True)
             if result.returncode != 0:
-                raise ZrokError(f"Failed to enable zrok: {result.stderr}")
+                error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                raise ZrokError(f"Failed to enable zrok: {error_msg}")
         
         @staticmethod
         def is_installed():
