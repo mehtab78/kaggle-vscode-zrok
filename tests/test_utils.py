@@ -72,6 +72,22 @@ class TestZrokAPI:
             env = zrok.find_env("nonexistent")
             assert env is None
     
+    def test_find_env_handles_none_environments(self):
+        """Test that find_env handles None return gracefully."""
+        from utils import Zrok
+        with patch.object(Zrok, 'get_environments', return_value=None):
+            zrok = Zrok("token")
+            env = zrok.find_env("test")
+            assert env is None
+    
+    def test_get_environments_handles_api_errors(self):
+        """Test that get_environments returns empty list on API errors."""
+        from utils import Zrok, ZrokError
+        with patch.object(Zrok, '_request', side_effect=ZrokError("API error")):
+            zrok = Zrok("token")
+            envs = zrok.get_environments()
+            assert envs == []
+    
     @patch('utils.urllib.request.urlopen')
     def test_find_share_token(self, mock_urlopen):
         from utils import Zrok

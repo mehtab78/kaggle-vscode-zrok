@@ -53,18 +53,32 @@ class Zrok:
             if e.code == 401:
                 raise ZrokError("Invalid or expired token. Get a new one from https://zrok.io")
             raise ZrokError(f"API error: {e.code}")
+        except urllib.error.URLError as e:
+            raise ZrokError(f"Network error: {e.reason}")
+        except Exception as e:
+            raise ZrokError(f"Request failed: {e}")
     
     def get_environments(self) -> list:
         """Get all environments for this account."""
         try:
-            return self._request("/overview").get('environments', [])
-        except Exception:
+            result = self._request("/overview")
+            if result is None:
+                return []
+            return result.get('environments', [])
+        except ZrokError:
+            logger.warning("Failed to get environments")
+            return []
+        except Exception as e:
+            logger.warning(f"Unexpected error getting environments: {e}")
             return []
     
     def find_env(self, name: str) -> dict:
         """Find environment by name."""
-        for item in self.get_environments():
-            if item.get("environment", {}).get("description", "").lower() == name.lower():
+        environments = self.get_environments()
+        if not environments:
+            return None
+        for item in environments:
+            if item and item.get("environment", {}).get("description", "").lower() == name.lower():
                 return item
         return None
     
