@@ -47,7 +47,8 @@ except ImportError:
                 data=json.dumps(data).encode() if data else None, method=method
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode()) if resp.read else {}
+                body = resp.read()
+                return json.loads(body.decode()) if body else {}
         
         def get_environments(self):
             try:
@@ -77,10 +78,22 @@ except ImportError:
                     print(f"   ✓ Cleaned up '{self.name}' environment")
         
         def enable(self):
+            # Check if already enabled
+            status = subprocess.run(["zrok", "status"], capture_output=True, text=True)
+            if "Account Token" in status.stdout and "<<SET>>" in status.stdout:
+                print("   ✓ zrok already enabled locally")
+                return
+            
             result = subprocess.run(["zrok", "enable", self.token, "-d", self.name], 
                                     capture_output=True, text=True)
             if result.returncode != 0:
-                error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                # Check for common errors
+                if "already enabled" in error_msg.lower():
+                    print("   ✓ zrok already enabled")
+                    return
+                if not error_msg:
+                    error_msg = "Unknown error - check your token at https://zrok.io"
                 raise ZrokError(f"Failed to enable zrok: {error_msg}")
         
         @staticmethod

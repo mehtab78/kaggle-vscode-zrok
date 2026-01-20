@@ -83,7 +83,8 @@ class Zrok:
                     method=method
                 )
                 with urllib.request.urlopen(req, timeout=self.TIMEOUT) as resp:
-                    return json.loads(resp.read().decode()) if resp.read else {}
+                    body = resp.read()
+                    return json.loads(body.decode()) if body else {}
             except urllib.error.HTTPError as e:
                 if e.code == 401:
                     raise ZrokError("Invalid token. Check your zrok API token.")
@@ -167,13 +168,22 @@ class Zrok:
     
     def enable(self) -> None:
         """Enable zrok with the configured environment name."""
+        # Check if already enabled
+        status = subprocess.run(["zrok", "status"], capture_output=True, text=True)
+        if "Account Token" in status.stdout and "<<SET>>" in status.stdout:
+            return  # Already enabled
+        
         result = subprocess.run(
             ["zrok", "enable", self.token, "-d", self.name],
             capture_output=True,
             text=True
         )
         if result.returncode != 0:
-            error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            error_msg = result.stderr.strip() or result.stdout.strip()
+            if "already enabled" in error_msg.lower():
+                return  # Already enabled
+            if not error_msg:
+                error_msg = "Unknown error - check your token at https://zrok.io"
             raise ZrokError(f"Failed to enable zrok: {error_msg}")
     
     @staticmethod
