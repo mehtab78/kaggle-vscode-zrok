@@ -65,8 +65,10 @@ class Zrok:
             if result is None:
                 return []
             return result.get('environments', [])
-        except ZrokError:
-            logger.warning("Failed to get environments")
+        except ZrokError as e:
+            # Only log if it's not a token error (expected during disable)
+            if "Invalid or expired token" not in str(e):
+                logger.warning(f"Failed to get environments: {e}")
             return []
         except Exception as e:
             logger.warning(f"Unexpected error getting environments: {e}")
@@ -104,11 +106,16 @@ class Zrok:
     def disable(self) -> None:
         """Disable zrok locally and clean up remote environment."""
         subprocess.run(["zrok", "disable"], capture_output=True)
-        env = self.find_env(self.name)
-        if env:
-            zid = env.get('environment', {}).get('zId')
-            if zid and self.delete_env(zid):
-                logger.info(f"Cleaned up '{self.name}' environment")
+        # Try to clean up remote environment, but don't fail if API is unavailable
+        try:
+            env = self.find_env(self.name)
+            if env:
+                zid = env.get('environment', {}).get('zId')
+                if zid and self.delete_env(zid):
+                    logger.info(f"Cleaned up '{self.name}' environment")
+        except Exception:
+            # Silently ignore API errors during cleanup
+            pass
     
     def enable(self) -> None:
         """Enable zrok with the configured environment name."""
@@ -129,9 +136,10 @@ class Zrok:
                 return
             if "401" in error_msg or "unauthorized" in error_msg.lower():
                 raise ZrokError(
-                    "Token expired or invalid!\n"
-                    "   → Go to https://zrok.io → Account → Generate new invite token\n"
-                    "   → The invite token is ONE-TIME USE only"
+                    "Token is invalid or expired!\n"
+                    "   → Go to https://zrok.io → Login → Account\n"
+                    "   → Copy your 'Account Token' (NOT the invite token)\n"
+                    "   → Account tokens are permanent until regenerated"
                 )
             if not error_msg:
                 error_msg = "Unknown error - check your token at https://zrok.io"

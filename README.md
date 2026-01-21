@@ -7,7 +7,7 @@ Connect to Kaggle notebooks remotely using VS Code through zrok private tunnels.
 ## 🚀 Quick Start
 
 ### 1. Get Zrok Token
-Create a free account at [zrok.io](https://zrok.io) and copy your token.
+Create a free account at [zrok.io](https://zrok.io) and copy your **Account Token** (not the invite token - see [Token Types](#-token-types) below).
 
 ### 2. On Kaggle
 Create a new notebook and run:
@@ -19,10 +19,17 @@ Create a new notebook and run:
 
 ### 3. On Local Machine
 ```bash
-# Install zrok (one-time)
+# Install zrok (one-time setup)
+# Linux/macOS:
 curl -sSf https://get.zrok.io | bash
 
+# Windows:
+# Download from https://github.com/openziti/zrok/releases
+
 # Connect (auto-discovers Kaggle tunnel!)
+python zrok_client.py --token YOUR_ZROK_TOKEN
+
+# Alternative: use the local/connect.py for more features
 python local/connect.py --token YOUR_ZROK_TOKEN
 ```
 
@@ -43,11 +50,15 @@ That's it! VS Code opens automatically.
 ```
 kaggle-vscode-zrok/
 ├── zrok_server.py          # Main server script (run on Kaggle)
+├── zrok_client.py          # Simple cross-platform client
 ├── local/
-│   ├── connect.py          # Run this locally
+│   ├── connect.py          # Enhanced client with more features
 │   └── install.sh          # Quick installer
 ├── kaggle/
 │   └── setup_kaggle.ipynb  # Quick start notebook
+├── utils.py                # Zrok API wrapper
+├── setup_script.py         # Alternative Kaggle setup script
+├── setup_ssh.sh            # SSH server configuration
 └── tests/                  # Test suite
 ```
 
@@ -68,11 +79,17 @@ python3 zrok_server.py --token "TOKEN" --password "secure123" --hide-password  #
 | `--env-name` | kaggle_server | Environment name |
 | `--hide-password` | false | Don't display password in output |
 
-### Local (connect.py)
+### Local (zrok_client.py or local/connect.py)
 ```bash
-python local/connect.py --token YOUR_TOKEN    # Basic usage
-python local/connect.py --token YOUR_TOKEN --no-vscode  # Skip VS Code
-python local/connect.py --stop                # Stop tunnel
+# Simple client (zrok_client.py)
+python zrok_client.py --token YOUR_TOKEN                    # Basic usage
+python zrok_client.py --token YOUR_TOKEN --no-vscode        # Skip VS Code
+python zrok_client.py --token YOUR_TOKEN --local-port 8888  # Custom port
+
+# Enhanced client (local/connect.py) - additional features
+python local/connect.py --token YOUR_TOKEN                  # Basic usage
+python local/connect.py --token YOUR_TOKEN --no-vscode      # Skip VS Code
+python local/connect.py --stop                              # Stop tunnel
 ```
 
 | Option | Default | Description |
@@ -80,7 +97,8 @@ python local/connect.py --stop                # Stop tunnel
 | `--token` | (prompt) | Your zrok API token |
 | `--name` | kaggle_client | Local environment name |
 | `--server-name` | kaggle_server | Server environment name |
-| `--port` | 9191 | Local tunnel port |
+| `--port` | 22 | Remote SSH port |
+| `--local-port` | 9191 | Local tunnel port |
 | `--no-vscode` | false | Skip VS Code launch |
 | `--workspace` | /kaggle/working | Remote directory |
 
@@ -97,6 +115,38 @@ python local/connect.py --stop                # Stop tunnel
 - Save work frequently
 - Connection breaks when notebook times out
 - Token is saved locally at `~/.kaggle_vscode_config.json`
+
+## 🔑 Token Types
+
+**IMPORTANT:** There are two types of tokens in zrok:
+
+### Account Token (What you need!)
+- ✅ Permanent, reusable API token
+- ✅ Used for all API operations and this project
+- ✅ Found at: https://zrok.io → Account → "Account Token"
+- ✅ Can be regenerated if compromised
+
+### Invite Token (NOT for this project)
+- ❌ One-time use only
+- ❌ Only for initial `zrok enable` command
+- ❌ Gets consumed after first use
+
+**Getting your Account Token:**
+1. Go to https://zrok.io and log in
+2. Click on your profile or "Account"
+3. Copy the **Account Token** (long alphanumeric string)
+4. Use this token in the scripts
+
+**Troubleshooting "Invalid token" errors:**
+```bash
+# View token explanation
+python local/token_help.py
+
+# Common issues:
+# - Using invite token instead of account token ❌
+# - Extra spaces when copying the token ❌
+# - Token from wrong account ❌
+```
 
 ## 🔐 Security
 

@@ -162,11 +162,14 @@ def connect(args) -> int:
     # Setup local zrok
     print("🔄 Setting up zrok...")
     try:
+        # Clean up any previous configuration
         zrok.disable()
+        # Enable with current token
         zrok.enable()
         print("✓ zrok enabled")
     except ZrokError as e:
         print(f"❌ Failed to enable zrok: {e}")
+        print("\n💡 Tip: Make sure you're using your Account Token from https://zrok.io")
         return 1
     
     # Auto-discover server tunnel
